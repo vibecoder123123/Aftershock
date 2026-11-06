@@ -1,0 +1,4 @@
+{
+  "rewrites": [{ "source": "/play", "destination": "/api/play" }],
+  "functions": { "api/play.js": { "includeFiles": "game/game.html" } }
+}
