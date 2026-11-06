@@ -1,4 +1,4 @@
-import { db, OWNER, same, ownerPassword, configured, inviteCode, send, readBody } from './_lib.js';
+import { db, OWNER, same, ownerPassword, configured, inviteCode, send, readBody, unsavedSeen } from './_lib.js';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return send(res, 405, { error: 'Not allowed.' });
@@ -16,6 +16,7 @@ export default async function handler(req, res) {
     if (code.length < 3 || code.length > 40) return send(res, 400, { error: 'Use 3 to 40 characters.' });
     await db.set('setting:invite', code);
   }
-  const players = (await db.list('player:')).map(p => ({ name: p.name, banned: !!p.banned, created: p.created, owner: !!p.owner })).sort((x, y) => x.created - y.created);
-  return send(res, 200, { players, invite: await inviteCode() });
+  const seen = { ...((await db.get('seen')) || {}), ...unsavedSeen() };
+  const players = (await db.list('player:')).map(p => ({ name: p.name, banned: !!p.banned, created: p.created, owner: !!p.owner, seen: seen[p.lower] || 0 })).sort((x, y) => (y.seen - x.seen) || (x.created - y.created));
+  return send(res, 200, { players, invite: await inviteCode(), now: Date.now() });
 }

@@ -12,8 +12,9 @@ const GH_FILE = `${GH_API}/repos/${GH_REPO}/contents/players.json`;
 const ghHead = { Authorization: `Bearer ${GH_TOKEN}`, Accept: 'application/vnd.github+json', 'User-Agent': 'aftershock' };
 let ghCache = null;
 async function ghRead() {
-  const r = await fetch(GH_FILE, { headers: { ...ghHead, ...(ghCache ? { 'If-None-Match': ghCache.etag } : {}) } });
-  if (r.status === 304) return ghCache;
+  const was = ghCache;
+  const r = await fetch(`${GH_FILE}?t=${Math.floor(Date.now() / 5000)}`, { cache: 'no-store', headers: { ...ghHead, 'Cache-Control': 'no-cache', ...(was ? { 'If-None-Match': was.etag } : {}) } });
+  if (r.status === 304) return was;
   if (r.status === 404) return { data: {}, sha: undefined, etag: '' };
   if (!r.ok) throw new Error(`GitHub storage error ${r.status}`);
   const j = await r.json();
@@ -76,6 +77,11 @@ export const db = {
     if (REDIS_URL) return redis('DEL', k);
     return sql('delete from aftershock_kv where k=$1', [k]);
   },
+  /** Saves several "last seen" times in one go, so a commit isn't made per player. */
+  async saveSeen(map) {
+    if (GH_REPO) return ghChange(d => { d.seen = { ...(d.seen || {}), ...map }; });
+    return this.set('seen', { ...((await this.get('seen')) || {}), ...map });
+  },
   async list(prefix) {
     if (GH_REPO) { const d = (await ghRead()).data; return Object.keys(d).filter(k => k.startsWith(prefix)).map(k => d[k]); }
     if (REDIS_URL) {
@@ -87,6 +93,20 @@ export const db = {
     return (await sql('select v from aftershock_kv where k like $1', [prefix + '%'])).rows.map(r => r.v);
   },
 };
+
+const pendingSeen = {}; let lastFlush = 0;
+export async function markSeen(lower) {
+  pendingSeen[lower] = Date.now();
+  if (Date.now() - lastFlush < 60000) return;
+  lastFlush = Date.now();
+  await flushSeen();
+}
+export async function flushSeen() {
+  if (!Object.keys(pendingSeen).length) return;
+  const map = { ...pendingSeen };
+  try { await db.saveSeen(map); for (const k in map) if (pendingSeen[k] === map[k]) delete pendingSeen[k]; } catch { /* try again next ping */ }
+}
+export const unsavedSeen = () => ({ ...pendingSeen });
 
 export const OWNER = 'honk';
 export const hash = s => crypto.createHash('sha256').update(String(s)).digest('hex');
